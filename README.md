@@ -1,5 +1,5 @@
-# Machine-Learning-Imaging
-The potential project for machine learning radio imaging of extended atmosphere of AGB stars
+# Regularized Maximum Likelihood Imaging
+The project for machine learning radio imaging of extended atmosphere of AGB stars
 
 ### Useful Links
 **SMILI software for RML imaging:** https://github.com/astrosmili/smili

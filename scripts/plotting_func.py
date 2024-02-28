@@ -16,7 +16,8 @@ def plot_final_image(rml, img_cube):
     plt.colorbar(im, label=r"Jy/$\mathrm{arcsec}^2$")
     plt.savefig('RML_loop_outputs/maximum_likelihood_image.pdf', format='pdf', bbox_inches='tight')
     print(f'Maximum likelihood image plot saved to: RML_loop_outputs/maximum_likelihood_image.pdf\n')
-    plt.close()
+    # plt.close()
+    return fig, ax
 
 def plot_loss_per_iter(hyperparams_config, loss_tracker):
     fig, ax = plt.subplots(nrows=1)

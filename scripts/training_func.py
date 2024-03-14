@@ -6,13 +6,12 @@ import matplotlib.pyplot as plt
 def seed_from_dirty_image(learning_rate_dim, n_iter_dim, coords, img, dset, plot_loss_per_iteration=True, plot_final_seed=True):
     """
     use the dirty image as the initial model image in BaseCube
-    create a loss function corresponding to the mean squared error (MSE) between the RML model image pixel fluxes 
-    and the dirty image pixel fluxes and then optimize this RML model. It calculates the loss based off of the 
-    image-plane distance between the dirty image and the state of the ImageCube in order to make the state of the 
+    create a loss function corresponding to the mean squared error (MSE) between the RML model image pixel fluxes
+    and the dirty image pixel fluxes and then optimize this RML model. It calculates the loss based off of the
+    image-plane distance between the dirty image and the state of the ImageCube in order to make the state of the
     ImageCube closer to the dirty image.
     """
-    print(f"Starting the optimisation loop with {n_iter_dim} iterations to optimise the initial model image (BaseCube) \
-          based on the dirty image...")
+    print(f"Starting the optimisation loop with {n_iter_dim} iterations to optimise the initial model image (BaseCube) based on the dirty image...")
     dirty_image = torch.tensor(img.copy())  # converts the dirty image into a pytorch tensor
     rml_dim = precomposed.SimpleNet(coords=coords, nchan=dset.nchan) # initialise SimpleNet
     optimizer_dim = torch.optim.SGD(rml_dim.parameters(), lr=learning_rate_dim) # instantiate the SGD optimizer
@@ -56,7 +55,7 @@ def seed_from_dirty_image(learning_rate_dim, n_iter_dim, coords, img, dset, plot
     return rml_dim
 
 
-def train(hyperparams_config, dset, rml, optimizer):
+def train(hyperparams_config, dset, rml, optimizer, writer=None):
     # initiate a list to store the loss values at each iteration
     loss_tracker = []
     # NOTE: there was no rml.train here, but in the tutorial, it's written model.train()
@@ -78,7 +77,11 @@ def train(hyperparams_config, dset, rml, optimizer):
             + hyperparams_config["lambda_TV"] * losses.TV_image(sky_cube)
             + hyperparams_config["entropy"] * losses.entropy(sky_cube, hyperparams_config["prior_intensity"])
             + hyperparams_config["TSV"] * losses.TSV(sky_cube)
-        ) # loss function with regularizers #TODO: Implement regularizers properly and check how to get best hyperparameter values
+        ) # loss function with regularizers
+
+        if writer is not None:
+            writer.add_scalar("loss", loss.item(), i)
+
         loss_tracker.append(loss.item()) # append the loss value to the loss tracker list
 
         # STEP 3: calculate the gradients of the loss with respect to the model parameters

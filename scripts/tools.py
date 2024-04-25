@@ -62,10 +62,12 @@ def make_power_spectrum(visibility_file, n_bins):
 ####################################################################################################
 
 ####################################################################################################
-def make_visibilities_from_image():
+def make_visibilities_from_image(image_file, cell_size):
 
     # load the image (of the sky brightness distribution model) using the pillow library
-    im_raw = Image.open('../data/star_images/model_star_delta.jpeg')
+    #im_raw = Image.open('../data/star_images/model_star_delta.jpeg')
+    #im_raw = Image.open('../data/star_images/RScl.jpg')
+    im_raw = Image.open(image_file)
 
     # convert the image to single axis greyscale from RGB, etc.
     im_grey = ImageOps.grayscale(im_raw)
@@ -74,6 +76,29 @@ def make_visibilities_from_image():
     # get image dimensions
     xsize, ysize = im_grey.size
     print(xsize, ysize)
+
+    # Additional tasks: optional
+    ####################################################################################################
+    xhann = np.hanning(xsize)
+    yhann = np.hanning(ysize)
+    # each is already normalized to a max of 1
+    # so hann is also normed to a max of 1
+    # broadcast to 2D
+    hann = np.outer(yhann, xhann)
+
+    # now convert the numpy array to a Pillow object
+    # scale to 0 - 255 and then convert to uint8
+    hann8 = np.uint8(hann * 255)
+    im_apod = Image.fromarray(hann8)
+
+    im_res = ImageMath.eval("a * b", a=im_grey, b=im_apod)#.rotate(90)
+
+    max_dim = np.maximum(xsize, ysize)
+    im_pad = ImageOps.pad(im_res, (max_dim, max_dim))
+
+    npix = 128
+    im_grey = im_pad.resize((npix,npix))
+    ####################################################################################################
 
     # obtain the pixel values of the greyscale image as a numpy array
     im_array = np.array(im_grey)
@@ -96,7 +121,8 @@ def make_visibilities_from_image():
     im_cube
 
     # choose how big we want our mock sky brightness to be on the sky (setting cell size and npix)
-    cell_size = 0.03 # arcsec
+    #cell_size = 0.01 # arcsec
+    print(cell_size, "arcsec")
 
     # calculate the number of pixels per image axis
     npix = im_array.shape[0]
@@ -174,5 +200,45 @@ def make_visibilities_from_image():
 
     # save the mock visibilities to a .npz file
     data = np.squeeze(data_noise)
-    np.savez("../data/visibilities/mock_visibilities_model_star_delta.npz", uu=uu, vv=vv, weight=weight, data=data)
+    #data = np.squeeze(data_noiseless)
+    #np.savez("../data/visibilities/mock_visibilities_model_star_delta.npz", uu=uu, vv=vv, weight=weight, data=data)
+    np.savez("../data/visibilities/mock_visibilities_RScl.npz", uu=uu, vv=vv, weight=weight, data=data)
 ####################################################################################################
+
+def calcvals(uvbin, baseline, weight,data):
+    fluxmean_real=np.zeros(len(uvbin))
+    fluxstd_real=np.zeros(len(uvbin))
+    fluxmean_imag=np.zeros(len(uvbin))
+    fluxstd_imag=np.zeros(len(uvbin))
+    for i in range(len(uvbin)-1):
+        uvmax=uvbin[i+1]
+        uvmin=uvbin[i]
+        data_where = np.logical_and(baseline>uvmin, baseline<=uvmax)        # boolean array to locate the baselines within the bin
+        data_where2 = data_where
+        # data_where2 = np.logical_and(data_where, mask)                      # remove any flagged visibilities
+        weight_n = weight[data_where2]
+        data_n = data[data_where2]
+        real_n = data_n.real
+        imag_n = data_n.imag
+
+        vis_real=0.
+        vis_imag=0.
+        variance_real = 0.
+        variance_imag = 0.
+        if (data_where2.sum()>0):
+            vis_real = np.average(real_n,weights=weight_n)
+            variance_real = np.sqrt(np.average((real_n-vis_real)**2.,weights=weight_n))
+            vis_imag = np.average(imag_n,weights=weight_n)
+            variance_imag = np.sqrt(np.average((imag_n-vis_imag)**2.,weights=weight_n))
+            num1 = data_where.sum()
+            variance_real /= (np.sqrt(num1)-1)
+            variance_imag /= (np.sqrt(num1)-1)
+        fluxmean_real[i]=vis_real
+        fluxstd_real[i]=variance_real
+        fluxmean_imag[i]=vis_imag
+        fluxstd_imag[i]=variance_imag
+        print(uvmin, uvmax)
+
+    psd = fluxmean_real**2.+fluxmean_imag**2.
+    variance_psd = 2.*fluxmean_real*fluxstd_real + 2.*fluxmean_imag*fluxstd_imag
+    return fluxmean_real,fluxstd_real,fluxmean_imag,fluxstd_imag, psd, variance_psd

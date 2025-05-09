@@ -58,15 +58,19 @@ def plot_dirty(imager, img, beam, chan):
 
 
 ############################################################################################################
-def plot_uv_distribution(uu, vv):
+def plot_uv_distribution(uu, vv, save=False, rasterized=True):
     fig, ax = plt.subplots(nrows=1)
-    ax.scatter(uu, vv, s=1, rasterized=True, linewidths=0.0, c="k")
+    ax.scatter(uu, vv, s=1.5, rasterized=rasterized, linewidths=0.0, c="k")
+    ax.scatter(-uu, -vv, s=1.5, rasterized=rasterized, linewidths=0.0, c="k")
     ax.set_xlabel(r"$u$ [k$\lambda$]")
     ax.set_ylabel(r"$v$ [k$\lambda$]")
     ax.set_title("uv distribution")
-    plt.savefig('RML_loop_outputs/uv_distribution.pdf', format='pdf', bbox_inches='tight')
-    print(f'(u,v) distribution plot saved to: RML_loop_outputs/uv_distribution.pdf\n')
-    plt.close()
+    if save:
+        plt.savefig('RML_loop_outputs/uv_distribution.pdf', format='pdf', bbox_inches='tight')
+        print(f'(u,v) distribution plot saved to: RML_loop_outputs/uv_distribution.pdf\n')
+    # plt.close()
+    ax.invert_xaxis()
+    return fig, ax
 ############################################################################################################
 
 

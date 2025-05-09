@@ -2,6 +2,7 @@ import torch
 from mpol import precomposed, losses
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def seed_from_dirty_image(learning_rate_dim, n_iter_dim, coords, img, dset, plot_loss_per_iteration=True, plot_final_seed=True):
     """
@@ -55,15 +56,15 @@ def seed_from_dirty_image(learning_rate_dim, n_iter_dim, coords, img, dset, plot
     return rml_dim
 
 
-def train(hyperparams_config, dset, rml, optimizer, writer=None):
+def train(hyperparams_config, dset, rml, optimizer, writer=None, mpol_version="0.3.0"):
     # initiate a list to store the loss values at each iteration
     loss_tracker = []
     # NOTE: there was no rml.train here, but in the tutorial, it's written model.train()
     rml.train() # set the model to training mode
     for i in range(hyperparams_config["epochs"]):
         # NOTE: it was rml.zero_grad() before, but in the tutorial it is written as optimizer.zero_grad()
-        optimizer.zero_grad()
-        # rml.zero_grad()
+        # optimizer.zero_grad()
+        rml.zero_grad()
 
         # STEP 1: calculate the model visibilities from the current model image
         vis = rml() # calculate model visibilities
@@ -71,12 +72,20 @@ def train(hyperparams_config, dset, rml, optimizer, writer=None):
 
         # STEP 2: calculate the loss between the model visibilities and the data visibilities
         # loss = losses.nll_gridded(vis, dset) # loss function without regularizers, using only the NLL
+        if mpol_version == "0.2.0":
+            nll_loss = losses.nll_gridded(vis, dset)
+        elif mpol_version == "0.3.0":
+            nll_loss = losses.r_chi_squared_gridded(vis, dset)
+        sparsity_loss = losses.sparsity(sky_cube)
+        TV_loss = losses.TV_image(sky_cube)
+        entropy_loss = losses.entropy(sky_cube, hyperparams_config["prior_intensity"])
+        TSV_loss = losses.TSV(sky_cube)
         loss = (
-            losses.nll_gridded(vis, dset)
-            + hyperparams_config["lambda_sparsity"] * losses.sparsity(sky_cube)
-            + hyperparams_config["lambda_TV"] * losses.TV_image(sky_cube)
-            + hyperparams_config["entropy"] * losses.entropy(sky_cube, hyperparams_config["prior_intensity"])
-            + hyperparams_config["TSV"] * losses.TSV(sky_cube)
+            nll_loss
+            + hyperparams_config["lambda_sparsity"] * sparsity_loss
+            + hyperparams_config["lambda_TV"] * TV_loss
+            + hyperparams_config["entropy"] * entropy_loss
+            + hyperparams_config["TSV"] * TSV_loss
         ) # loss function with regularizers
 
         if writer is not None:
@@ -89,4 +98,8 @@ def train(hyperparams_config, dset, rml, optimizer, writer=None):
 
         # STEP 4: subtract the gradient image to the base image in order to advance base parameters in the direction of the minimum loss value
         optimizer.step()
-    return loss_tracker
+        
+    loss_dictionary={'nll_loss': nll_loss.item(), 'sparsity_loss': sparsity_loss.item(), 
+                     'TV_loss': TV_loss.item(), 'entropy_loss': entropy_loss.item(), 
+                     'TSV_loss': TSV_loss.item(), 'total_loss': loss.item()}
+    return loss_tracker, loss_dictionary

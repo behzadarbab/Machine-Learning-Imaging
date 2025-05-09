@@ -1,15 +1,12 @@
 import numpy as np
 import pandas as pd
 import math
-from PIL import Image, ImageOps, ImageMath
 
 import torch
 import matplotlib.pyplot as plt
-from astropy.utils.data import download_file
 
 # Mpol utilities
-from mpol.__init__ import zenodo_record
-from mpol import coordinates, gridding, fourier, losses, precomposed, utils
+from mpol import fourier, utils
 from mpol.images import ImageCube
 
 
@@ -62,148 +59,144 @@ def make_power_spectrum(visibility_file, n_bins):
 ####################################################################################################
 
 ####################################################################################################
-def make_visibilities_from_image(image_file, cell_size):
+def image_to_mock_visibilities(image, pixel_size_arcsec, array_config_file, outfile, add_noise=False, plot=True):
+    """
+    Function to convert an image to mock visibilities.
+    'image' should be a 2D numpy array, and 'array_config_file' should be a .npz file containing the u, v coordinates and weights.
+    '{outfile}.npz' is the name of the output file to which the mock visibilities will be saved.
+    'add_noise' is a boolean flag to indicate whether to add noise to the mock visibilities or not.
+    """
 
-    # load the image (of the sky brightness distribution model) using the pillow library
-    #im_raw = Image.open('../data/star_images/model_star_delta.jpeg')
-    #im_raw = Image.open('../data/star_images/RScl.jpg')
-    im_raw = Image.open(image_file)
 
-    # convert the image to single axis greyscale from RGB, etc.
-    im_grey = ImageOps.grayscale(im_raw)
-    print(im_grey.mode)
+    ### load the array configuration from the input .npz file
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    # NOTE: Do not read in visibility data from this file even if it exists, only load the baseline positions and weights, i.e., the uu, vv, and weight arrays
+    d = np.load(array_config_file)
+    uu = d["uu"]
+    vv = d["vv"]
+    weight = d["weight"]
+    print('Loaded array configuration from', array_config_file, '\n')
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
 
-    # get image dimensions
-    xsize, ysize = im_grey.size
-    print(xsize, ysize)
 
-    # Additional tasks: optional
-    ####################################################################################################
-    xhann = np.hanning(xsize)
-    yhann = np.hanning(ysize)
-    # each is already normalized to a max of 1
-    # so hann is also normed to a max of 1
-    # broadcast to 2D
-    hann = np.outer(yhann, xhann)
-
-    # now convert the numpy array to a Pillow object
-    # scale to 0 - 255 and then convert to uint8
-    hann8 = np.uint8(hann * 255)
-    im_apod = Image.fromarray(hann8)
-
-    im_res = ImageMath.eval("a * b", a=im_grey, b=im_apod)#.rotate(90)
-
-    max_dim = np.maximum(xsize, ysize)
-    im_pad = ImageOps.pad(im_res, (max_dim, max_dim))
-
-    npix = 128
-    im_grey = im_pad.resize((npix,npix))
-    ####################################################################################################
-
-    # obtain the pixel values of the greyscale image as a numpy array
-    im_array = np.array(im_grey)
-    im_array
-
-    # convert this array to a float64 type and normalize its max value to 1
-    im_array = im_array.astype("float64")
-    im_array = im_array/im_array.max()
-
-    # flipping the image to prevent it from being flipped when visualized with imshow(origin='lower')
-    im_array = np.flipud(im_array)
-
-    # visualise the image
-    plt.imshow(im_array, origin='lower')
-    plt.colorbar()
+    ### plot the loaded baseline configuration
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    print('Plotting the loaded baseline configuration...')
+    fig, ax = plt.subplots(nrows=1)
+    ax.scatter(uu, vv, s=1.5, rasterized=True, linewidths=0.0, c="k") # plot the u,v coordinates
+    ax.scatter(-uu, -vv, s=1.5, rasterized=True, linewidths=0.0, c="k")  # and their Hermitian conjugates
+    ax.set_xlabel(r"$u$") # [k$\lambda$]? [$\lambda$]?
+    ax.set_ylabel(r"$v$")
+    ax.set_title("Baseline configuration to be used for generating mock visibilities")
+    ax.invert_xaxis()
     plt.show()
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
 
+
+    ### pre-process the data to formats needed for MPoL modeules
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    print('Processing the image to MPoL/torch formats...\n')
     # convert single channel image to a 3D imager cube (add a dimension of size 1)
-    im_cube = np.expand_dims(im_array, axis=0)
-    im_cube
-
+    im_cube = np.expand_dims(image, axis=0)
     # choose how big we want our mock sky brightness to be on the sky (setting cell size and npix)
-    #cell_size = 0.01 # arcsec
-    print(cell_size, "arcsec")
-
-    # calculate the number of pixels per image axis
-    npix = im_array.shape[0]
-    print(npix)
-
-    # calculate the area per pixel in the image
-    pixel_area = cell_size**2 # arcsec
-    print(pixel_area, "arcsec^2")
-
-    # calculate the total flux in the original image
-    original_flux = np.sum(im_cube * pixel_area)
-    print(original_flux, "Jy")
-
-    # scale the image so that the total flux becomes 'new_flux' Jy
-    new_flux = 5 # Jy
-    im_cube_flux_scaled = im_cube * (new_flux/original_flux)
-    scaled_flux = np.sum(im_cube_flux_scaled * pixel_area)
-    print(scaled_flux, "Jy")
-    print(im_cube_flux_scaled, "Jy")
-
+    mod_image_cell_size = pixel_size_arcsec # arcsec
+    print('Model image cell size:', mod_image_cell_size, 'arcsec\n')
+    npix = image.shape[0] # number of pixels along one side of the image
     # convert the image cube array to a torch tensor
-    img_tensor = torch.tensor(im_cube_flux_scaled.copy())
-    img_tensor
-
+    img_tensor = torch.tensor(im_cube.copy())
     # shift the tensor from a “Sky Cube” to a “Packed Cube” as the input to mpol.images.ImageCube() which will be FFT’ed to get the visibilities is a “Packed Cube” object
     img_tensor_packed = utils.sky_cube_to_packed_cube(img_tensor)
-
     # create an MPol "Image Cube" object
-    image = ImageCube.from_image_properties(cell_size=cell_size, npix=npix, nchan=1, cube=img_tensor_packed)
+    mod_image = ImageCube.from_image_properties(cell_size=mod_image_cell_size, npix=npix, nchan=1, cube=img_tensor_packed)
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
 
-    # double check if the image cube is as expected: check if it has the same scaled flux
-    print(np.sum(np.squeeze(utils.packed_cube_to_sky_cube(image()).detach().numpy()) * pixel_area))
-    # double check if the image cube is as expected: convert back to numpy array and visualise
-    plt.imshow(np.squeeze(utils.packed_cube_to_sky_cube(image()).detach().numpy()), origin="lower")
+
+    ### plot the processed image to make sure that it is the same as the user-input image
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    print('Plotting the processed image to check that it is the same as the original user-input...')
+    plt.imshow(np.squeeze(utils.packed_cube_to_sky_cube(mod_image()).detach().numpy()), cmap="gray", origin="lower")
     plt.colorbar()
     plt.show()
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
 
-    # obtain a (u,v) distribution (and weights) on which to calculate the visibilities of the image (download from MPol ALMA logo tutorial)
 
-    # download the ALMA logo mock visibility dataset
-    fname = download_file(
-        f"https://zenodo.org/record/{zenodo_record}/files/logo_cube.noise.npz",
-        cache=True,
-        show_progress=True,
-        pkgname="mpol",
-    )
+    ### some checks
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    config_max_uv = np.max(np.array([uu,vv]))
+    config_max_cell_size = utils.get_maximum_cell_size(config_max_uv)
+    print("The maximum cell_size that will still Nyquist sample the spatial frequency represented by the maximum u,v value is {:.2f} arcseconds".format(config_max_cell_size))
+    print("Pixel size in input image is: ", pixel_size_arcsec, '\n')
+    assert pixel_size_arcsec < config_max_cell_size
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
 
-    # select the components for a single channel
-    chan = 4
 
-    # extract the (u,v) distribution and weights from the downloaded data
-    d = np.load(fname)
-    uu = d["uu"][chan]
-    vv = d["vv"][chan]
-    weight = d["weight"][chan]
+    ### create the mock visibilities corresponding to the image (having the same shape as the uu, vv, and weight inputs)
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    print('Creating the mock visibilities from the image...\n')
+    mod_image_data_noise, mod_image_data_noiseless = fourier.make_fake_data(mod_image, uu, vv, weight)
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
 
-    nvis = uu.shape[0]
-    print(f"Dataset has {nvis} visibilities")
 
-    print(uu)
-    print(vv)
-    print(weight)
-
-    max_uv = np.max(np.array([uu,vv]))
-    max_cell_size = utils.get_maximum_cell_size(max_uv)
-    print("The maximum cell_size that will still Nyquist sample the spatial frequency represented by the maximum u,v value is {:.2f} arcseconds".format(max_cell_size))
-    assert cell_size < max_cell_size
-
-    # create the mock visibilities corresponding to the image (having the same shape as the uu, vv, and weight inputs)
-    data_noise, data_noiseless = fourier.make_fake_data(image, uu, vv, weight)
-
-    print(data_noise.shape)
-    print(data_noiseless.shape)
-    print(data_noise)
+    ### save the mock visibilities
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+    if add_noise:
+        # add noise to the mock visibilities
+        print('Using mock visibilities with noise\n')
+        mod_image_data = np.squeeze(mod_image_data_noise)
+    else:
+        # save the noiseless mock visibilities
+        print('Using mock visibilities without noise\n')
+        mod_image_data = np.squeeze(mod_image_data_noiseless)
 
     # save the mock visibilities to a .npz file
-    data = np.squeeze(data_noise)
-    #data = np.squeeze(data_noiseless)
-    #np.savez("../data/visibilities/mock_visibilities_model_star_delta.npz", uu=uu, vv=vv, weight=weight, data=data)
-    np.savez("../data/visibilities/mock_visibilities_RScl.npz", uu=uu, vv=vv, weight=weight, data=data)
-####################################################################################################
+    np.savez(f"{outfile}.npz", uu=uu, vv=vv, weight=weight, data=mod_image_data)
+    print(f"Mock visibilities saved to {outfile}.npz\n")
+    ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+
+    if plot:
+        ### re-load and plot the mock visibilities from the .npz file to check if they were saved correctly
+        ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+        print(f'Re-loading the mock visibilities from {outfile}.npz file and plotting array configuration...')
+        d = np.load(f"{outfile}.npz")
+        uu = d["uu"]
+        vv = d["vv"]
+        weight = d["weight"]
+        data = d["data"]
+        data_re = np.real(data)
+        data_im = np.imag(data)
+        # Plot the downloaded (u,v) distribution
+        fig, ax = plt.subplots(nrows=1)
+        ax.scatter(uu, vv, s=1.5, rasterized=True, linewidths=0.0, c="k") # plot the u,v coordinates
+        ax.scatter(-uu, -vv, s=1.5, rasterized=True, linewidths=0.0, c="k")  # and their Hermitian conjugates
+        ax.set_xlabel(r"$u$")
+        ax.set_ylabel(r"$v$")
+        ax.invert_xaxis()
+        plt.show()
+        ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+
+
+        ### calculate the amplitude and phase of the visibilities and make plots
+        ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+        print('Calculating the amplitude and phase of the visibilities and making plots...')
+        amp = np.abs(data)
+        phase = np.angle(data)
+        # calculate the uv distance (baseline separations in meters, calculated as sqrt(u*u+v*v))
+        uvdist = np.hypot(uu, vv)
+        fig, ax = plt.subplots(nrows=4, sharex=True, figsize=(8, 8))
+        pkw = {"s":1, "rasterized":True, "linewidths":0.0, "c":"k"}
+        ax[0].scatter(uvdist, data_re, **pkw)
+        ax[0].set_ylabel("Re(V) [Jy]")
+        ax[1].scatter(uvdist, data_im, **pkw)
+        ax[1].set_ylabel("Im(V) [Jy]")
+        ax[2].scatter(uvdist, amp, **pkw)
+        ax[2].set_ylabel("amplitude [Jy]")
+        ax[3].scatter(uvdist, phase, **pkw)
+        ax[3].set_ylabel("phase [radians]")
+        ax[3].set_xlabel(r"$uv$dist [k$\lambda$]")
+        plt.tight_layout()
+        plt.show()
+        ###~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~###
+
 
 def calcvals(uvbin, baseline, weight,data):
     fluxmean_real=np.zeros(len(uvbin))

@@ -1,0 +1,2 @@
+,lambda_sparsity,lambda_TV,entropy,entropy_prior,TSV,epochs,cross_validator,cross_val_score,residual_RMS,nll_loss
+0,1e-07,1e-07,1e-07,1,1e-07,1000,RandomCellSplitGridded,0.1113312309392024,0.0323277906159912,0.009562602066415606
